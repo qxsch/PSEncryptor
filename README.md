@@ -1,6 +1,10 @@
 # PSEncryptor
 Simple Powershell AES Encryption and Decryption
 
+## How to download and install?
+```pwsh
+(Invoke-WebRequest -Uri https://raw.githubusercontent.com/qxsch/PSEncryptor/main/encryptor.ps1).Content | Out-File encryptor.ps1
+```
 
 ## Encrypt
 ```pwsh

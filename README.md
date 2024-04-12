@@ -6,6 +6,11 @@ Simple Powershell AES Encryption and Decryption
 (Invoke-WebRequest -Uri https://raw.githubusercontent.com/qxsch/PSEncryptor/main/encryptor.ps1).Content | Out-File encryptor.ps1
 ```
 
+## Usage
+```
+encryptor.ps1 [-text] <string> [[-key] <string>] [[-mode] Encrypt|Decrypt] [-echo] [<CommonParameters>]
+```
+
 ## Encrypt
 ```pwsh
 # encrypt a string

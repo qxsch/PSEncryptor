@@ -1,5 +1,5 @@
 param(
-    [Parameter(Position=0,mandatory=$true)]
+    [Parameter(Position=0,mandatory=$true, ValueFromPipeline=$true)]
     [string]$text,
     
     [Parameter(Position=1,mandatory=$false)]
@@ -8,7 +8,9 @@ param(
 
     [Parameter(Position=2,mandatory=$false)]
     [ValidateSet("Encrypt","Decrypt")]
-    [string]$mode="Encrypt"
+    [string]$mode="Encrypt",
+
+    [switch]$echo
 )
 
 function Encrypt-String {
@@ -97,11 +99,22 @@ function Decrypt-CipherText {
 
 if ($mode -eq "Encrypt") {
     $encryptedText = Encrypt-String -clearText $text -key $key
-    Write-Host "Encrypted Text: $encryptedText"
+    if($echo) {
+        Write-Host "Encrypted Text: $encryptedText"
+    }
+    else {
+        $encryptedText
+    }
+    
 }
 elseif ($mode -eq "Decrypt") {
     $decryptedText = Decrypt-CipherText -cipherText $text -key $key
-    Write-Host "Decrypted Text: $decryptedText"
+    if($echo) {
+        Write-Host "Decrypted Text: $decryptedText"
+    }
+    else {
+        $decryptedText
+    }
 }
 else {
     Throw "Invalid mode specified. Please use 'Encrypt' or 'Decrypt'."

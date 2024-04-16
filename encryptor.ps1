@@ -68,8 +68,8 @@ function Encrypt-String {
     $KeySize = 128
 
     # Generate random bytes for salt and initialization vector (IV)
-    $saltStringBytes = New-Object byte[] 16
-    $ivStringBytes = New-Object byte[] 16
+    $saltStringBytes = New-Object byte[] ($KeySize / 8)
+    $ivStringBytes = New-Object byte[] ($KeySize / 8)
     [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($saltStringBytes)
     [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($ivStringBytes)
 
@@ -142,7 +142,7 @@ function Decrypt-CipherText {
 
 
 if ($mode -eq "Encrypt") {
-    $encryptedText = Encrypt-String -clearText $text -key $key
+    $encryptedText = Encrypt-String -clearText $text -key $key -DerivationIterations $DerivationIterations
     if($echo) {
         Write-Host "Encrypted Text: $encryptedText"
     }
@@ -152,7 +152,7 @@ if ($mode -eq "Encrypt") {
     
 }
 elseif ($mode -eq "Decrypt") {
-    $decryptedText = Decrypt-CipherText -cipherText $text -key $key
+    $decryptedText = Decrypt-CipherText -cipherText $text -key $key -DerivationIterations $DerivationIterations
     if($echo) {
         Write-Host "Decrypted Text: $decryptedText"
     }
@@ -163,3 +163,4 @@ elseif ($mode -eq "Decrypt") {
 else {
     Throw "Invalid mode specified. Please use 'Encrypt' or 'Decrypt'."
 }
+

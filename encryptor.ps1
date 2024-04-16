@@ -1,3 +1,38 @@
+<#
+.SYNOPSIS
+Encrypts or decrypts a string using AES encryption.
+
+.DESCRIPTION
+This scripts encrypts or decrypts a string using AES encryption. It generates random bytes for salt and initialization vector (IV) using PBKDF2.
+
+.PARAMETER text
+The text to be encrypted. Can also be used to pipe text to the script.
+
+.PARAMETER key
+The key to be used for encryption. If not provided, a default key "MySecretKey" is used.
+
+.PARAMETER mode
+Should it encrypt or decrypt the provided text. Default is Encrypt. Use Decrypt to decrypt the text.
+
+.PARAMETER echo
+This switch is used to write the output to the console.
+
+.OUTPUTS
+The encrypted or decrypted text. If the -echo switch is used, the output is written to the console.
+
+.EXAMPLE
+./encryptor.ps1 -text "Hello, World!" -key "mysecret"
+This example encrypts the string "Hello, World!" using the key "mysecret".
+
+.EXAMPLE
+.\encryptor.ps1 "vTrVExZplQJfV6PCt4++L1MDlHUMjAyhhZMV77PsAjzoy8lojIEx9LfGKjK1akxm" -key "mysecret" -mode Decrypt
+This example decrypts the string back to "Hello, World!" using the key "mysecret".
+
+.NOTES
+The key size is set to 128 (AES-128).
+#>
+
+
 param(
     [Parameter(Position=0,mandatory=$true, ValueFromPipeline=$true)]
     [string]$text,
@@ -10,18 +45,27 @@ param(
     [ValidateSet("Encrypt","Decrypt")]
     [string]$mode="Encrypt",
 
+    [int32]$DerivationIterations = 1000,
+
     [switch]$echo
 )
+
+if($DerivationIterations -lt 10) {
+    Throw "DerivationIterations cannot be below 10."
+}
+if($DerivationIterations -gt 2100000000) {
+    Throw "DerivationIterations cannot be above 2'100'000'000."
+}
 
 function Encrypt-String {
     param (
         [string]$clearText,
-        [string]$key
+        [string]$key,
+        [int32]$DerivationIterations = 1000
     )
 
     # Constants for encryption
     $KeySize = 128
-    $DerivationIterations = 1000
 
     # Generate random bytes for salt and initialization vector (IV)
     $saltStringBytes = New-Object byte[] 16
@@ -56,12 +100,12 @@ function Encrypt-String {
 function Decrypt-CipherText {
     param (
         [string]$cipherText,
-        [string]$key
+        [string]$key,
+        [int32]$DerivationIterations = 1000
     )
 
     # Constants for decryption
     $KeySize = 128
-    $DerivationIterations = 1000
 
     # Convert the base64-encoded cipher text to bytes
     $cipherTextBytesWithSaltAndIv = [Convert]::FromBase64String($cipherText)
@@ -119,4 +163,3 @@ elseif ($mode -eq "Decrypt") {
 else {
     Throw "Invalid mode specified. Please use 'Encrypt' or 'Decrypt'."
 }
-

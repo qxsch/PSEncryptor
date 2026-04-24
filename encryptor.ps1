@@ -22,9 +22,11 @@ Should it encrypt or decrypt the provided text. Default is Encrypt. Use Decrypt 
 .PARAMETER DerivationIterations
 The number of PBKDF2 iterations for key derivation. Default is 100000. Minimum is 10000.
 
-.PARAMETER Clipboard
-When specified without -text, reads input from the clipboard. When specified with -text or
-pipeline input, copies the output to the clipboard in addition to writing it to the pipeline.
+.PARAMETER FromClipboard
+When specified, reads input from the clipboard instead of requiring -text.
+
+.PARAMETER ToClipboard
+When specified, writes the output to the clipboard. No output is written to the pipeline or console.
 
 .PARAMETER echo
 This switch is used to write the output to the console.
@@ -54,8 +56,8 @@ Encrypts an entire file as a single string. Using -Raw is much faster for files 
 PBKDF2 key derivation runs only once instead of once per line.
 
 .EXAMPLE
-.\encryptor.ps1 -Clipboard -key "mysecret"
-Reads text from the clipboard, encrypts it, and copies the result back to the clipboard.
+.\encryptor.ps1 -FromClipboard -ToClipboard -key "mysecret"
+Reads text from the clipboard, encrypts it, and writes the result back to the clipboard.
 
 .NOTES
 Uses AES-256-CBC with PBKDF2-SHA256 key derivation (100k iterations) and HMAC-SHA256
@@ -67,7 +69,7 @@ is zeroed after use.
 [CmdletBinding(DefaultParameterSetName='Text')]
 param(
     [Parameter(ParameterSetName='Text', Position=0, Mandatory=$true, ValueFromPipeline=$true)]
-    [Parameter(ParameterSetName='Clipboard', Position=0, Mandatory=$false, ValueFromPipeline=$true)]
+    [Parameter(ParameterSetName='FromClipboard', Position=0, Mandatory=$false, ValueFromPipeline=$true)]
     [AllowEmptyString()]
     [string]$text,
     
@@ -82,8 +84,10 @@ param(
 
     [switch]$PromptKey,
 
-    [Parameter(ParameterSetName='Clipboard', Mandatory=$true)]
-    [switch]$Clipboard,
+    [Parameter(ParameterSetName='FromClipboard', Mandatory=$true)]
+    [switch]$FromClipboard,
+
+    [switch]$ToClipboard,
 
     [switch]$echo
 )
@@ -105,14 +109,15 @@ begin {
         Throw "DerivationIterations cannot be above 2'100'000'000."
     }
 
-    # If -Clipboard is set and no text was provided, read from clipboard
+    # If -FromClipboard is set and no text was provided, read from clipboard
     $clipboardInput = $false
-    if ($Clipboard -and -not $PSBoundParameters.ContainsKey('text')) {
+    if ($FromClipboard -and -not $PSBoundParameters.ContainsKey('text')) {
         $clipboardInput = $true
     }
 
     # Collect results for clipboard output
-    $clipboardResults = [System.Collections.Generic.List[string]]::new()
+    $clipboardResults = $null
+    if ($ToClipboard) { $clipboardResults = [System.Collections.Generic.List[string]]::new() }
 
     function Encrypt-String {
         param (
@@ -291,38 +296,33 @@ process {
 
     # Pass empty strings through unchanged (e.g. blank lines from Get-Content)
     if ([string]::IsNullOrEmpty($text)) {
-        $text
-        if ($Clipboard) { $clipboardResults.Add($text) }
+        if ($ToClipboard) { $clipboardResults.Add($text) } else { $text }
         return
     }
 
     if ($mode -eq "Encrypt") {
         $result = Encrypt-String -clearText $text -key $key -DerivationIterations $DerivationIterations
-        if($echo) {
-            Write-Host "Encrypted Text: $result"
-        }
-        else {
-            $result
-        }
-        if ($Clipboard) { $clipboardResults.Add($result) }
     }
     elseif ($mode -eq "Decrypt") {
         $result = Decrypt-CipherText -cipherText $text -key $key -DerivationIterations $DerivationIterations
-        if($echo) {
-            Write-Host "Decrypted Text: $result"
-        }
-        else {
-            $result
-        }
-        if ($Clipboard) { $clipboardResults.Add($result) }
     }
     else {
         Throw "Invalid mode specified. Please use 'Encrypt' or 'Decrypt'."
     }
+
+    if ($ToClipboard) {
+        $clipboardResults.Add($result)
+    }
+    elseif ($echo) {
+        Write-Host "$($mode -eq 'Encrypt' ? 'Encrypted' : 'Decrypted') Text: $result"
+    }
+    else {
+        $result
+    }
 }
 
 end {
-    if ($Clipboard -and $clipboardResults.Count -gt 0) {
+    if ($ToClipboard -and $clipboardResults.Count -gt 0) {
         $clipboardResults -join "`n" | Set-Clipboard
     }
 }

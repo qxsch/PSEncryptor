@@ -1,18 +1,26 @@
 <#
 .SYNOPSIS
-Encrypts or decrypts a string using AES encryption.
+Encrypts or decrypts a string using AES-256 encryption with HMAC-SHA256 authentication.
 
 .DESCRIPTION
-This scripts encrypts or decrypts a string using AES encryption. It generates random bytes for salt and initialization vector (IV) using PBKDF2.
+This script encrypts or decrypts a string using AES-256-CBC encryption with PBKDF2-SHA256
+key derivation and HMAC-SHA256 encrypt-then-MAC authentication to prevent tampering.
 
 .PARAMETER text
-The text to be encrypted. Can also be used to pipe text to the script.
+The text to be encrypted or decrypted. Can also be used to pipe text to the script.
 
 .PARAMETER key
 The key to be used for encryption. If not provided, a default key "MySecretKey" is used.
 
+.PARAMETER PromptKey
+When specified, prompts for the key interactively using a masked input. The key will not appear
+in command history or process arguments. Overrides the -key parameter.
+
 .PARAMETER mode
 Should it encrypt or decrypt the provided text. Default is Encrypt. Use Decrypt to decrypt the text.
+
+.PARAMETER DerivationIterations
+The number of PBKDF2 iterations for key derivation. Default is 100000. Minimum is 10000.
 
 .PARAMETER echo
 This switch is used to write the output to the console.
@@ -25,11 +33,17 @@ The encrypted or decrypted text. If the -echo switch is used, the output is writ
 This example encrypts the string "Hello, World!" using the key "mysecret".
 
 .EXAMPLE
-.\encryptor.ps1 "vTrVExZplQJfV6PCt4++L1MDlHUMjAyhhZMV77PsAjzoy8lojIEx9LfGKjK1akxm" -key "mysecret" -mode Decrypt
-This example decrypts the string back to "Hello, World!" using the key "mysecret".
+.\encryptor.ps1 "<encrypted-text>" -key "mysecret" -mode Decrypt
+This example decrypts the string back using the key "mysecret".
+
+.EXAMPLE
+.\encryptor.ps1 -text "Hello, World!" -PromptKey
+This example prompts for the key interactively (masked input) so it doesn't appear in history.
 
 .NOTES
-The key size is set to 128 (AES-128).
+Uses AES-256-CBC with PBKDF2-SHA256 key derivation (100k iterations) and HMAC-SHA256
+encrypt-then-MAC authentication. All cryptographic objects are disposed and key material
+is zeroed after use.
 #>
 
 
@@ -40,18 +54,28 @@ param(
     [Parameter(Position=1,mandatory=$false)]
     [string]$key="MySecretKey",
 
-
     [Parameter(Position=2,mandatory=$false)]
     [ValidateSet("Encrypt","Decrypt")]
     [string]$mode="Encrypt",
 
-    [int32]$DerivationIterations = 1000,
+    [int32]$DerivationIterations = 100000,
+
+    [switch]$PromptKey,
 
     [switch]$echo
 )
 
-if($DerivationIterations -lt 10) {
-    Throw "DerivationIterations cannot be below 10."
+if ($PromptKey) {
+    $secureKey = Read-Host -Prompt "Enter key" -AsSecureString
+    $key = [System.Net.NetworkCredential]::new('', $secureKey).Password
+}
+
+if ([string]::IsNullOrEmpty($key)) {
+    Throw "Key cannot be empty."
+}
+
+if($DerivationIterations -lt 10000) {
+    Throw "DerivationIterations cannot be below 10,000."
 }
 if($DerivationIterations -gt 2100000000) {
     Throw "DerivationIterations cannot be above 2'100'000'000."
@@ -61,83 +85,163 @@ function Encrypt-String {
     param (
         [string]$clearText,
         [string]$key,
-        [int32]$DerivationIterations = 1000
+        [int32]$DerivationIterations = 100000
     )
 
     # Constants for encryption
-    $KeySize = 128
+    $KeySize = 256
+    $BlockSize = 128
 
     # Generate random bytes for salt and initialization vector (IV)
-    $saltStringBytes = New-Object byte[] ($KeySize / 8)
-    $ivStringBytes = New-Object byte[] ($KeySize / 8)
-    [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($saltStringBytes)
-    [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($ivStringBytes)
+    $saltBytes = New-Object byte[] ($KeySize / 8)
+    $ivBytes = New-Object byte[] ($BlockSize / 8)
+    $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+    try {
+        $rng.GetBytes($saltBytes)
+        $rng.GetBytes($ivBytes)
+    }
+    finally {
+        $rng.Dispose()
+    }
 
-    # Derive a key from the password and salt using PBKDF2
-    $password = [Security.Cryptography.Rfc2898DeriveBytes]::new($key, $saltStringBytes, $DerivationIterations, [System.Security.Cryptography.HashAlgorithmName]::SHA256)
+    # Derive encryption key and HMAC key from the password and salt using PBKDF2-SHA256
+    $password = [Security.Cryptography.Rfc2898DeriveBytes]::new($key, $saltBytes, $DerivationIterations, [System.Security.Cryptography.HashAlgorithmName]::SHA256)
     $keyBytes = $password.GetBytes($KeySize / 8)
+    $hmacKeyBytes = $password.GetBytes($KeySize / 8)
 
-    # Create an AES encryption algorithm
-    $symmetricKey = [System.Security.Cryptography.Aes]::Create()
+    $symmetricKey = $null
+    $encryptor = $null
+    $memoryStream = $null
+    $cryptoStream = $null
+    $streamWriter = $null
 
-    # Create an encryptor
-    $encryptor = $symmetricKey.CreateEncryptor($keyBytes, $ivStringBytes)
+    try {
+        # Create AES-256 encryption
+        $symmetricKey = [System.Security.Cryptography.Aes]::Create()
+        $symmetricKey.KeySize = $KeySize
+        $encryptor = $symmetricKey.CreateEncryptor($keyBytes, $ivBytes)
 
-    # Create memory streams for encryption
-    $memoryStream = [System.IO.MemoryStream]::new()
-    $cryptoStream = [System.Security.Cryptography.CryptoStream]::new($memoryStream, $encryptor, [System.Security.Cryptography.CryptoStreamMode]::Write)
-    $streamWriter = [System.IO.StreamWriter]::new($cryptoStream)
-    $streamWriter.Write($clearText)
-    $streamWriter.Close()
+        # Encrypt the clear text
+        $memoryStream = [System.IO.MemoryStream]::new()
+        $cryptoStream = [System.Security.Cryptography.CryptoStream]::new($memoryStream, $encryptor, [System.Security.Cryptography.CryptoStreamMode]::Write)
+        $streamWriter = [System.IO.StreamWriter]::new($cryptoStream)
+        $streamWriter.Write($clearText)
+        $streamWriter.Close()
 
-    # Combine salt, IV, and encrypted data into the final cipher text
-    $cipherTextBytes = $saltStringBytes + $ivStringBytes + $memoryStream.ToArray()
+        $encryptedBytes = $memoryStream.ToArray()
 
-    # Convert the combined data (salt, IV, and encrypted data) to a Base64-encoded string
-    return [Convert]::ToBase64String($cipherTextBytes)
+        # Combine salt + IV + ciphertext as the payload
+        $payload = $saltBytes + $ivBytes + $encryptedBytes
+
+        # Compute HMAC-SHA256 over the payload (encrypt-then-MAC)
+        $hmac = [System.Security.Cryptography.HMACSHA256]::new($hmacKeyBytes)
+        try {
+            $mac = $hmac.ComputeHash($payload)
+        }
+        finally {
+            $hmac.Dispose()
+        }
+
+        # Final output: payload + HMAC tag
+        $result = $payload + $mac
+
+        return [Convert]::ToBase64String($result)
+    }
+    finally {
+        if ($null -ne $streamWriter) { $streamWriter.Dispose() }
+        if ($null -ne $cryptoStream) { $cryptoStream.Dispose() }
+        if ($null -ne $memoryStream) { $memoryStream.Dispose() }
+        if ($null -ne $encryptor) { $encryptor.Dispose() }
+        if ($null -ne $symmetricKey) { $symmetricKey.Dispose() }
+        if ($null -ne $password) { $password.Dispose() }
+        if ($null -ne $keyBytes) { [Array]::Clear($keyBytes, 0, $keyBytes.Length) }
+        if ($null -ne $hmacKeyBytes) { [Array]::Clear($hmacKeyBytes, 0, $hmacKeyBytes.Length) }
+    }
 }
 
 function Decrypt-CipherText {
     param (
         [string]$cipherText,
         [string]$key,
-        [int32]$DerivationIterations = 1000
+        [int32]$DerivationIterations = 100000
     )
 
     # Constants for decryption
-    $KeySize = 128
+    $KeySize = 256
+    $BlockSize = 128
+    $MacSize = 256
 
-    # Convert the base64-encoded cipher text to bytes
-    $cipherTextBytesWithSaltAndIv = [Convert]::FromBase64String($cipherText)
+    # Decode the base64-encoded data
+    $allBytes = [Convert]::FromBase64String($cipherText)
 
-    # Extract the salt and IV (Initialization Vector) from the cipher text
-    $saltStringBytes = $cipherTextBytesWithSaltAndIv[0..(($KeySize / 8) - 1)]
-    $ivStringBytes = $cipherTextBytesWithSaltAndIv[($KeySize / 8)..(($KeySize / 8 * 2) - 1)]
+    $saltSize = $KeySize / 8       # 32 bytes
+    $ivSize = $BlockSize / 8       # 16 bytes
+    $macSize = $MacSize / 8        # 32 bytes
+    $minLength = $saltSize + $ivSize + $macSize + 1
 
-    # Derive the encryption key from the provided key and salt
-    $password = [Security.Cryptography.Rfc2898DeriveBytes]::new($key, $saltStringBytes, $DerivationIterations, [System.Security.Cryptography.HashAlgorithmName]::SHA256)
+    if ($allBytes.Length -lt $minLength) {
+        Throw "Invalid ciphertext: data is too short."
+    }
+
+    # Extract salt, IV, encrypted data, and HMAC tag
+    $saltBytes = $allBytes[0..($saltSize - 1)]
+    $ivBytes = $allBytes[$saltSize..($saltSize + $ivSize - 1)]
+    $encryptedBytes = $allBytes[($saltSize + $ivSize)..($allBytes.Length - $macSize - 1)]
+    $receivedMac = $allBytes[($allBytes.Length - $macSize)..($allBytes.Length - 1)]
+    $payload = $allBytes[0..($allBytes.Length - $macSize - 1)]
+
+    # Derive encryption key and HMAC key
+    $password = [Security.Cryptography.Rfc2898DeriveBytes]::new($key, $saltBytes, $DerivationIterations, [System.Security.Cryptography.HashAlgorithmName]::SHA256)
     $keyBytes = $password.GetBytes($KeySize / 8)
+    $hmacKeyBytes = $password.GetBytes($KeySize / 8)
 
-    # Create an AES cipher with the derived key
-    $aesAlg = [Security.Cryptography.Aes]::Create()
+    $aesAlg = $null
+    $decryptor = $null
+    $msDecrypt = $null
+    $csDecrypt = $null
+    $srDecrypt = $null
 
-    # Create a decryptor with the key and IV
-    $decryptor = $aesAlg.CreateDecryptor($keyBytes, $ivStringBytes)
+    try {
+        # Verify HMAC-SHA256 before decrypting (authenticate-then-decrypt)
+        $hmac = [System.Security.Cryptography.HMACSHA256]::new($hmacKeyBytes)
+        try {
+            $computedMac = $hmac.ComputeHash($payload)
+        }
+        finally {
+            $hmac.Dispose()
+        }
 
-    # Decrypt the cipher text
-    $originalCipherText = $cipherTextBytesWithSaltAndIv[($KeySize / 8 * 2)..($cipherTextBytesWithSaltAndIv.Length - 1)]
+        # Constant-time comparison to prevent timing attacks
+        $diff = 0
+        for ($i = 0; $i -lt $computedMac.Length; $i++) {
+            $diff = $diff -bor ($computedMac[$i] -bxor $receivedMac[$i])
+        }
+        if ($diff -ne 0) {
+            Throw "Authentication failed: ciphertext has been tampered with or the key is incorrect."
+        }
 
-    # Create a memory stream to hold the original cipher text
-    $msDecrypt = [System.IO.MemoryStream]::new($originalCipherText)
+        # Create AES-256 decryptor
+        $aesAlg = [Security.Cryptography.Aes]::Create()
+        $aesAlg.KeySize = $KeySize
+        $decryptor = $aesAlg.CreateDecryptor($keyBytes, $ivBytes)
 
-    # Create a crypto stream to perform decryption
-    $csDecrypt = [Security.Cryptography.CryptoStream]::new($msDecrypt, $decryptor, [Security.Cryptography.CryptoStreamMode]::Read)
+        # Decrypt the ciphertext
+        $msDecrypt = [System.IO.MemoryStream]::new($encryptedBytes)
+        $csDecrypt = [Security.Cryptography.CryptoStream]::new($msDecrypt, $decryptor, [Security.Cryptography.CryptoStreamMode]::Read)
+        $srDecrypt = [System.IO.StreamReader]::new($csDecrypt)
 
-    # Create a stream reader to read the decrypted data
-    $srDecrypt = [System.IO.StreamReader]::new($csDecrypt)
-
-    # Return the decrypted plain text
-    return $srDecrypt.ReadToEnd()
+        return $srDecrypt.ReadToEnd()
+    }
+    finally {
+        if ($null -ne $srDecrypt) { $srDecrypt.Dispose() }
+        if ($null -ne $csDecrypt) { $csDecrypt.Dispose() }
+        if ($null -ne $msDecrypt) { $msDecrypt.Dispose() }
+        if ($null -ne $decryptor) { $decryptor.Dispose() }
+        if ($null -ne $aesAlg) { $aesAlg.Dispose() }
+        if ($null -ne $password) { $password.Dispose() }
+        if ($null -ne $keyBytes) { [Array]::Clear($keyBytes, 0, $keyBytes.Length) }
+        if ($null -ne $hmacKeyBytes) { [Array]::Clear($hmacKeyBytes, 0, $hmacKeyBytes.Length) }
+    }
 }
 
 
